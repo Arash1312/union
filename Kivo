@@ -1,0 +1,439 @@
+Kivo/
+├── README.md
+├── kivo.py
+├── config.json
+└── .gitignore
+
+
+========================
+FILE: kivo.py
+========================
+
+import os
+import json
+import shutil
+import argparse
+from pathlib import Path
+from datetime import datetime
+
+VERSION = "1.0.0"
+CONFIG_FILE = "config.json"
+
+
+DEFAULT_CONFIG = {
+    "scan_paths": [],
+    "extensions": [
+        ".tmp",
+        ".temp",
+        ".log",
+        ".bak",
+        ".cache"
+    ],
+    "min_age_days": 7,
+    "dry_run": True
+}
+
+
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as file:
+            json.dump(DEFAULT_CONFIG, file, indent=4)
+
+        return DEFAULT_CONFIG
+
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, OSError):
+        print("Could not read config.json. Using default configuration.")
+        return DEFAULT_CONFIG
+
+
+def file_age_days(path):
+    try:
+        modified = os.path.getmtime(path)
+        age = datetime.now().timestamp() - modified
+        return age / 86400
+    except OSError:
+        return 0
+
+
+def scan_directory(directory, extensions, min_age_days):
+    results = []
+
+    if not os.path.exists(directory):
+        return results
+
+    for root, _, files in os.walk(directory):
+        for filename in files:
+            path = os.path.join(root, filename)
+
+            try:
+                extension = Path(filename).suffix.lower()
+
+                if extension not in extensions:
+                    continue
+
+                if file_age_days(path) < min_age_days:
+                    continue
+
+                size = os.path.getsize(path)
+
+                results.append({
+                    "path": path,
+                    "size": size,
+                    "age": round(file_age_days(path), 1)
+                })
+
+            except (OSError, PermissionError):
+                continue
+
+    return results
+
+
+def format_size(size):
+    units = ["B", "KB", "MB", "GB", "TB"]
+
+    value = float(size)
+
+    for unit in units:
+        if value < 1024:
+            return f"{value:.2f} {unit}"
+
+        value /= 1024
+
+    return f"{value:.2f} PB"
+
+
+def print_results(results):
+    if not results:
+        print("\nNo removable files found.")
+        return
+
+    print("\nKivo Scan Results")
+    print("=" * 70)
+
+    total_size = 0
+
+    for index, item in enumerate(results, start=1):
+        print(
+            f"{index:>3}. "
+            f"{format_size(item['size']):>12} | "
+            f"{item['age']:>6} days | "
+            f"{item['path']}"
+        )
+
+        total_size += item["size"]
+
+    print("=" * 70)
+    print(f"Files found : {len(results)}")
+    print(f"Space found : {format_size(total_size)}")
+
+
+def clean_files(results):
+    deleted = 0
+    failed = 0
+    freed = 0
+
+    for item in results:
+        path = item["path"]
+
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+
+                deleted += 1
+                freed += item["size"]
+
+        except (OSError, PermissionError):
+            failed += 1
+
+    print("\nCleanup complete.")
+    print(f"Deleted : {deleted}")
+    print(f"Failed  : {failed}")
+    print(f"Freed   : {format_size(freed)}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Kivo - Minimal and safe desktop cleanup tool."
+    )
+
+    parser.add_argument(
+        "--scan",
+        action="store_true",
+        help="Scan configured directories."
+    )
+
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Remove detected files."
+    )
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"Kivo {VERSION}"
+    )
+
+    args = parser.parse_args()
+
+    config = load_config()
+
+    paths = config.get("scan_paths", [])
+    extensions = set(config.get("extensions", []))
+    min_age_days = config.get("min_age_days", 7)
+
+    if not paths:
+        print("No scan paths configured.")
+        print("Add directories to config.json first.")
+        return
+
+    if not args.scan and not args.clean:
+        print("Use --scan or --clean.")
+        return
+
+    results = []
+
+    print("\nStarting Kivo...")
+    print(f"Minimum file age: {min_age_days} days")
+
+    for directory in paths:
+        print(f"Scanning: {directory}")
+
+        results.extend(
+            scan_directory(
+                directory,
+                extensions,
+                min_age_days
+            )
+        )
+
+    print_results(results)
+
+    if args.clean:
+        if not results:
+            return
+
+        if config.get("dry_run", True):
+            print(
+                "\nDry-run mode is enabled."
+                "\nNo files were deleted."
+                "\nSet \"dry_run\" to false in config.json to enable cleanup."
+            )
+            return
+
+        answer = input(
+            "\nDelete these files? [y/N]: "
+        ).strip().lower()
+
+        if answer == "y":
+            clean_files(results)
+        else:
+            print("Cleanup cancelled.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+========================
+FILE: config.json
+========================
+
+{
+    "scan_paths": [
+        "./sandbox"
+    ],
+    "extensions": [
+        ".tmp",
+        ".temp",
+        ".log",
+        ".bak",
+        ".cache"
+    ],
+    "min_age_days": 7,
+    "dry_run": true
+}
+
+
+========================
+FILE: .gitignore
+========================
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+
+========================
+FILE: README.md
+========================
+
+# Kivo
+
+A small, fast and safe desktop cleanup utility built with Python.
+
+Kivo scans selected directories for old temporary files, shows exactly what
+it found, calculates the recoverable storage and optionally removes the files.
+
+The project is intentionally minimal. No database, no external dependencies
+and no background services.
+
+## Features
+
+- Lightweight
+- Zero external dependencies
+- Configurable scan locations
+- Configurable file extensions
+- Minimum file age protection
+- Human-readable scan results
+- Dry-run mode by default
+- Interactive deletion confirmation
+- Works with relative or absolute paths
+- Simple JSON configuration
+
+## Requirements
+
+Python 3.9+
+
+## Installation
+
+Clone the repository:
+
+    git clone https://github.com/YOUR_USERNAME/kivo.git
+
+Enter the project:
+
+    cd kivo
+
+No packages are required.
+
+## Configuration
+
+Open `config.json`.
+
+Example:
+
+    {
+        "scan_paths": [
+            "C:/Users/YourName/Downloads",
+            "C:/Users/YourName/AppData/Local/Temp"
+        ],
+        "extensions": [
+            ".tmp",
+            ".temp",
+            ".log",
+            ".bak",
+            ".cache"
+        ],
+        "min_age_days": 7,
+        "dry_run": true
+    }
+
+Linux example:
+
+    {
+        "scan_paths": [
+            "/tmp",
+            "/home/user/Downloads"
+        ]
+    }
+
+## Scan
+
+Run:
+
+    python kivo.py --scan
+
+Kivo will inspect the configured directories and display:
+
+- File path
+- File size
+- File age
+- Total recoverable storage
+
+## Cleanup
+
+By default Kivo runs in dry-run mode.
+
+This means no files are deleted.
+
+To enable cleanup, change:
+
+    "dry_run": false
+
+Then run:
+
+    python kivo.py --clean
+
+Kivo will ask for confirmation before deleting anything.
+
+## Safety
+
+Kivo only considers files that:
+
+1. Exist inside configured scan directories.
+2. Match one of the configured extensions.
+3. Are older than the configured minimum age.
+
+The default configuration uses dry-run mode.
+
+Always review the scan results before enabling deletion.
+
+## Commands
+
+    python kivo.py --scan
+
+Scan configured directories.
+
+    python kivo.py --clean
+
+Scan and optionally remove matching files.
+
+    python kivo.py --version
+
+Show the current Kivo version.
+
+## Project Structure
+
+    kivo/
+    ├── README.md
+    ├── kivo.py
+    ├── config.json
+    └── .gitignore
+
+## Why Kivo?
+
+Most cleanup tools try to become huge system utilities.
+
+Kivo takes the opposite approach.
+
+It does one job:
+
+    Find old junk.
+    Show it clearly.
+    Let you decide.
+
+## License
+
+MIT License
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files, to deal in the Software
+without restriction, including without limitation the rights to use, copy,
+modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
